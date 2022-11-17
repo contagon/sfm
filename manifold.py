@@ -13,14 +13,13 @@ def K_from_vec(x):
     K = np.zeros((3,4))
     K[0,0] = x[0]
     K[1,1] = x[1]
-    K[0,1] = x[2]
     K[2,2] = 1
-    K[0:2,2] = x[3:5]
+    K[0:2,2] = x[2:4]
     return K
 
 @njit
 def vec_from_K(K):
-    return np.array([K[0,0], K[1,1], K[0,1], K[0,2], K[1,2]])
+    return np.array([K[0,0], K[1,1], K[0,2], K[1,2]])
 
 @njit
 def SE3_from_vec(u):

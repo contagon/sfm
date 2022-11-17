@@ -18,9 +18,9 @@ def g_pi(p):
 @njit
 def pi_K(K, T, P):
     Pp = T@np.append(P,1)
-    return np.array([[Pp[0],   0.0, Pp[1], Pp[2],   0.0],
-                     [  0.0, Pp[1],   0.0,   0.0, Pp[2]],
-                     [  0.0,   0.0,   0.0,   0.0,   0.0]])
+    return np.array([[Pp[0],   0.0, Pp[2],   0.0],
+                     [  0.0, Pp[1],   0.0, Pp[2]],
+                     [  0.0,   0.0,   0.0,   0.0]])
     
 @njit
 def pi_T(K, T, P):
@@ -75,9 +75,9 @@ def jac(K, Ts, Ps):
     N = Ps.shape[0]
     
     # Iterate through, saving where everything needs to go
-    o_lm = 5+6*(M-1)
+    o_lm = 4+6*(M-1)
     for j in range(M):
-        o_cam = 5+(j-1)*6
+        o_cam = 4+(j-1)*6
         for i in range(N):
             o_meas = 2*N*j
             # intrinsics
@@ -91,7 +91,7 @@ def jac(K, Ts, Ps):
             matrices.append( h_P(K, Ts[j], Ps[i]) )
             indices.append(  (o_meas+2*i, o_lm+3*i) )
         
-    mat = scipy.sparse.coo_array( _block_sparse(matrices, indices), shape=(2*N*M, 5 + 6*(M-1) + 3*N) )
+    mat = scipy.sparse.coo_array( _block_sparse(matrices, indices), shape=(2*N*M, 4 + 6*(M-1) + 3*N) )
             
     return mat.tocsc()
 
