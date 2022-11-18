@@ -19,7 +19,7 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
 
     for k in range(max_iters):
         # Make right hand side
-        J = jac(K, Ts, Ps)
+        J = jac(K, Ts, Ps, zs)
         JtJ = J.T@J
         
         # Make left hand side
@@ -60,8 +60,8 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
         Ts = Tstar
         Ps = Pstar
         
-        if lam < lam_init:
-            lam *= lam_multiplier
+        if lam > lam_init:
+            lam /= lam_multiplier
         
         # See if it was a small improvement, and if so, be done
         if np.abs(prev_cost - cost) < tol:

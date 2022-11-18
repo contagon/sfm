@@ -67,31 +67,38 @@ def _block_sparse(As, indices):
 
 
 #-------------  Construct the full Jacobian --------------#
-def jac(K, Ts, Ps):    
+def jac(K, Ts, Ps, zs):    
     # Set things up!
     matrices = List()
     indices = List()
     M = Ts.shape[0]
     N = Ps.shape[0]
+    Z = sum([cam_meas[0].shape[0] for cam_meas in zs])*2
     
     # Iterate through, saving where everything needs to go
-    o_lm = 4+6*(M-1)
-    for j in range(M):
-        o_cam = 4+(j-1)*6
-        for i in range(N):
-            o_meas = 2*N*j
+    meas_idx = 0
+    for cam_idx, (pt_indices, meassss) in enumerate(zs):
+        for pt_idx, meas in zip(pt_indices, meassss):
+            # indexing helpers
+            o_cam = 4+(cam_idx-1)*6
+            o_lm = 4+6*(M-1)+3*pt_idx
+
             # intrinsics
-            matrices.append( h_K(K, Ts[j], Ps[i]) )
-            indices.append( (o_meas+2*i, 0) )
+            matrices.append( h_K(K, Ts[cam_idx], Ps[pt_idx]) )
+            indices.append( (2*meas_idx, 0) )
+            
             # camera pose (but not first camera)
-            if j != 0:
-                matrices.append( h_T(K, Ts[j], Ps[i]) )
-                indices.append( (o_meas+2*i, o_cam) )
+            if cam_idx != 0:
+                matrices.append( h_T(K, Ts[cam_idx], Ps[pt_idx]) )
+                indices.append( (2*meas_idx, o_cam) )
+                
             # landmark position
-            matrices.append( h_P(K, Ts[j], Ps[i]) )
-            indices.append(  (o_meas+2*i, o_lm+3*i) )
+            matrices.append( h_P(K, Ts[cam_idx], Ps[pt_idx]) )
+            indices.append(  (2*meas_idx, o_lm) )
+            
+            meas_idx += 1
         
-    mat = scipy.sparse.coo_array( _block_sparse(matrices, indices), shape=(2*N*M, 4 + 6*(M-1) + 3*N) )
+    mat = scipy.sparse.coo_array( _block_sparse(matrices, indices), shape=(Z, 4 + 6*(M-1) + 3*N) )
             
     return mat.tocsc()
 
