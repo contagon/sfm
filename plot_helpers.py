@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import cv2
 
 def plotCoordinateFrame(T_0f, size=1, linewidth=2, k='-', ax=None):
     # https://github.com/ethz-asl/kalibr/blob/master/Schweizer-Messer/sm_python/python/sm/plotCoordinateFrame.py
@@ -69,3 +70,25 @@ def set_axes_equal(ax):
     ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
     ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
     ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+    
+    
+# There was a bunch of bugs in the original implementation...
+def plotMatches(im1, im2, locs1, locs2, filename=None, figsize=(6,4)):
+    fig = plt.figure(figsize=figsize)
+    # draw two images side by side
+    imH = max(im1.shape[0], im2.shape[0])
+    im = np.zeros((imH, im1.shape[1]+im2.shape[1]), dtype='uint8')
+    
+    if len(im1.shape) >= 3:
+        im1 = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
+    if len(im2.shape) >= 3:
+        im2 = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
+        
+    im[0:im1.shape[0], 0:im1.shape[1]] = im1
+    im[0:im2.shape[0], im1.shape[1]:] = im2
+    
+    plt.imshow(im, cmap='gray')
+    for ((x1, y1), (x2, y2)) in zip(locs1, locs2):
+        plt.plot([x1, x2+im1.shape[1]], [y1,y2], 'r', lw=0.5)
+
+    plt.show()
