@@ -22,6 +22,20 @@ def vec_from_K(K):
     return np.array([K[0,0], K[1,1], K[0,2], K[1,2]])
 
 @njit
+def SO3_from_vec(w):
+    wx = skew(w)
+    theta = np.linalg.norm(w)
+    if np.abs(theta) < 0.0001:
+        R = np.eye(3) + wx + wx@wx/2 + wx@wx@wx/6
+    
+    else:
+        A = np.sin(theta) / theta
+        B = (1 - np.cos(theta)) / theta**2
+        R = np.eye(3) + A*wx + B*wx@wx
+    
+    return R
+
+@njit
 def SE3_from_vec(u):
     # https://www.ethaneade.com/lie.pdf
     w = u[:3]
@@ -75,3 +89,4 @@ def vec_from_SE3(T):
     Vinv = np.linalg.inv(V)
     xi[3:] = Vinv@p
     return xi
+
