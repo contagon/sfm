@@ -39,7 +39,7 @@ class StructureFromMotion():
     def __init__(self, K, connections=1):
         # landmark index, camera index, kp, des
         self.num_cam = 0
-        self.landmarks_seen = np.zeros((0,1+1+2+128), dtype='float32')
+        self.measurements = np.zeros((0,1+1+2+128), dtype='float32')
         self.landmarks_new = np.zeros((0,1+1+2+128), dtype='float32')
         self.connections = connections
         
@@ -53,34 +53,34 @@ class StructureFromMotion():
 
     @property
     def num_lm(self):
-        if self.landmarks_seen.shape[0] == 0:
+        if self.measurements.shape[0] == 0:
             return 0
         else:
-            return int(self.landmarks_seen[-1,0])+1
+            return int(self.measurements[-1,0])+1
 
     @property
     def landmarks(self):
         """
-        Removes all duplicate rows for matching purposes. Assumes landmarks_seen are sorted by landmarks, then by most recent camera
+        Removes all duplicate rows for matching purposes. Assumes measurements are sorted by landmarks, then by most recent camera
         """
         if self.num_lm == 0:
-            return self.landmarks_seen
+            return self.measurements
         else:
             idx = np.zeros(self.num_lm, dtype=int)
             count = 0
-            for i, val in enumerate(self.landmarks_seen[:,0]):
+            for i, val in enumerate(self.measurements[:,0]):
                 if val > count:
                     idx[count] = i-1
                     count += 1
 
-            return self.landmarks_seen[idx]
+            return self.measurements[idx]
         
     def add_image(self, im):
         # First, we find keypoints
         kp, des = self.feat.detectAndCompute(im,None)
         kp = np.array([k.pt for k in kp])
         
-        im_landmarks = np.hstack([
+        landmarks_im = np.hstack([
                             np.full((kp.shape[0], 1), np.NaN),
                             np.full((kp.shape[0], 1), self.num_cam), 
                             kp, 
@@ -89,23 +89,23 @@ class StructureFromMotion():
     
         if self.num_cam == 0:
             self.Ts.append(np.eye(4))
-            self.landmarks_new = im_landmarks
+            self.landmarks_new = landmarks_im
         else:
             # Next, we connect images together
             # TODO: Fix so you can check with multiple images at same time
-            E, repeated_lm, new_lm = self._register_image(self.num_cam, im_landmarks)
+            E, repeated_lm, new_lm = self._register_image(self.num_cam, landmarks_im)
 
             # # Get an estimate for this frame & new landmarks
-            # if repeated_lm == 0:
-            #     T, Ps = self._pose_from_E(E, new_lm, this_idx-1, this_idx)
-            # else:
-            #     T, Ps, bad_idx = self._pose_from_pts(new_lm, this_idx)
-            #     self.seen = np.delete(self.seen, bad_idx, 0)
+            if repeated_lm == 0:
+                T, Ps = self._pose_from_E(E, self.num_cam-1, self.num_cam)
+            else:
+                T, Ps, bad_idx = self._pose_from_pts(new_lm, self.num_cam)
+                # self.seen = np.delete(self.seen, bad_idx, 0)
 
-            # # Update everything
-            # self.Ts.append(T)
-            # self.Ps = np.append(self.Ps, Ps, 0)
-            # assert self.Ps.shape[0] == self.seen.shape[0]
+            # Update everything
+            self.Ts.append(T)
+            self.Ps = np.append(self.Ps, Ps, 0)
+            assert self.Ps.shape[0] == self.num_lm
 
             # Run a small optimization with this new information
 
@@ -114,18 +114,26 @@ class StructureFromMotion():
     @property
     def _zs(self):
         # Organize measurements a  bit better
-        return self.landmarks_seen[:,0].astype('int'), self.landmarks_seen[:,1].astype('int'), self.landmarks_seen[:,2:4]
+        return self.measurements[:,0].astype('int'), self.measurements[:,1].astype('int'), self.measurements[:,2:4]
     
-    def _pose_from_E(self, E, new_lm, im1_idx, im2_idx):
+    def _pose_from_E(self, E, im1_idx, im2_idx):
         # recover pose
-        kp1 = self.kp[im1_idx][ self.seen[-new_lm:,im1_idx] ]
-        kp2 = self.kp[im2_idx][ self.seen[-new_lm:,im2_idx] ]
+        mm_idx1 = np.where(self.measurements[:,1]==im1_idx)[0]
+        mm_idx2 = np.where(self.measurements[:,1]==im2_idx)[0]
+        kp1 = self.measurements[ mm_idx1, 2:4 ]
+        kp2 = self.measurements[ mm_idx2, 2:4 ]
         
         points, R, t, inliers = cv2.recoverPose(E, kp1, kp2, self.K[:3,:3])
         T = np.eye(4)
         T[:3,:3] = R
         T[:3,3] = t.flatten()
+
+        # Remove outliers
         inliers = inliers.flatten() != 0
+        print(self.measurements)
+        self.measurements = np.delete(self.measurements, mm_idx1[~inliers])
+        self.measurements = np.delete(self.measurements, mm_idx2[~inliers])
+        print(self.measurements)
         print("\t", kp1.shape[0] - np.sum(inliers), "are listed as outliers when recovering pose from E")
     
         # Triangulate points
@@ -136,57 +144,53 @@ class StructureFromMotion():
         
     def _pose_from_pts(self, new_lm, this_idx):
         # Convert kp idx -> landmark index -> 3d point
-        lm_idx = np.nonzero(self.seen[:,this_idx])[0]
-        lm_old = lm_idx[:-new_lm]
-        lm_new = lm_idx[-new_lm:]
-        kps = self.kp[this_idx][ self.seen[lm_old,this_idx] ]
+        mm_idx = np.where(self.measurements[:,1]==this_idx)[0]
+        mm_idx_new = mm_idx[-new_lm:]
+        mm_idx_old = mm_idx[:-new_lm]
+        kps_old = self.measurements[mm_idx_old,2:4]
+        lms_old = self.measurements[mm_idx_old,0].astype('int')
         
         # Use the estimating point estimates to find relative pose
-        retval, rvec, tvec, inliers = cv2.solvePnPRansac(self.Ps[lm_old], kps, self.K[:3,:3], None, reprojectionError=3, confidence=.99)
+        retval, rvec, tvec, inliers = cv2.solvePnPRansac(self.Ps[lms_old], kps_old, self.K[:3,:3], None, reprojectionError=3, confidence=.99)
         inliers = inliers.flatten()
         T = np.eye(4)
         T[:3,:3] = SO3_from_vec(rvec.flatten())
         T[:3,3] = tvec.flatten()
-        print("\t", kps.shape[0] - inliers.shape[0], "are listed as outliers when running PnP")
+        print("\t", kps_old.shape[0] - inliers.shape[0], "are listed as outliers when running PnP")
         
         # Triangulate all the other ones
-        Ps = []
-        bad_idx = []
-        for lm in lm_new:
-            cam_saw = np.nonzero(self.seen[lm])[0]
-            assert len(cam_saw) > 1
-            assert cam_saw[-1] == this_idx
-            idx1 = cam_saw[0]
-            Ps_new = cv2.triangulatePoints(self.K@self.Ts[idx1], self.K@T, self.kp[idx1][self.seen[lm, idx1]], self.kp[this_idx][self.seen[lm, this_idx]])
-            Ps_new = Ps_new.flatten() / Ps_new[3]
-            if Ps_new[2] >= 0 and np.linalg.norm(Ps_new) < 50:
-                Ps.append(Ps_new[:3])
-            else:
-                bad_idx.append(lm)
-        
-        Ps = np.array(Ps)
+        lms_new = self.measurements[mm_idx_new,0].astype('int')
+        kp1_new = self.measurements[mm_idx_new,2:4] 
+        kp2_new = self.measurements[mm_idx_new-1,2:4] 
+
+        # TODO: If switching to multiple camera matches, this'll need to be a for loop
+        Ps = cv2.triangulatePoints(self.K@self.Ts[this_idx-1], self.K@T, kp1_new.T, kp2_new.T)
+        Ps = from_homogen(Ps.T)
+
+        bad_idx = lms_new[np.where(Ps[:,2] < 0)[0]]
+
         return T, Ps, bad_idx
             
-    def _register_image(self, cam_idx, im_landmarks):
+    def _register_image(self, cam_idx, landmarks_im):
         print(f"Connecting Camera {cam_idx}")
         
         # Sort through seen landmarks
         landmarks_all = np.vstack((self.landmarks, self.landmarks_new))
 
+        # Only use from last camera
+        landmarks_all = landmarks_all[ landmarks_all[:,1] == cam_idx-1 ]
+
         # BFMatcher with default params
-        knn_matches = self.match.match(landmarks_all[:,4:], im_landmarks[:,4:])
+        knn_matches = self.match.match(landmarks_all[:,4:], landmarks_im[:,4:])
         knn_matches = sorted(knn_matches, key = lambda x : x.distance)
 
-        # Apply ratio test
+        # Get matches
         match_idx = np.array([[m.queryIdx, m.trainIdx] for m in knn_matches])
         kp1_match = landmarks_all[match_idx[:,0], 2:4]
-        kp2_match = im_landmarks[match_idx[:,1], 2:4]
+        kp2_match = landmarks_im[match_idx[:,1], 2:4]
         print("\t", match_idx.shape[0], "Starting # matches")
 
         # Ransac & find essential matrix
-        # TODO: This is bad b/c it's being done with multiple images at a time
-        # TODO: Choose one with most matches? (probably previous in most cases)
-        # TODO: Or do it for each one?
         E, inlier = cv2.findEssentialMat(kp1_match, kp2_match, self.K[:3,:3], method=cv2.RANSAC, threshold=1.5, prob=0.99)
         inlier = inlier.flatten().astype('bool')
         match_idx = match_idx[inlier]  
@@ -196,42 +200,52 @@ class StructureFromMotion():
         if self.num_lm == 0:
             n = match_idx.shape[0]
             lm = np.arange(n)
-            self.landmarks_seen = np.vstack((landmarks_all[match_idx[:,0]], im_landmarks[match_idx[:,1]]))
-            self.landmarks_seen[:n,0] = lm
-            self.landmarks_seen[n:,0] = lm
-            a = np.lexsort((self.landmarks_seen[:,1], self.landmarks_seen[:,0]))
-            self.landmarks_seen = self.landmarks_seen[a]
-            return E, 0, match_idx.shape[0]
+
+            # Add matches to measurements
+            self.measurements = np.vstack((landmarks_all[match_idx[:,0]], landmarks_im[match_idx[:,1]]))
+            self.measurements[:n,0] = lm
+            self.measurements[n:,0] = lm
+            a = np.lexsort((self.measurements[:,1], self.measurements[:,0]))
+            self.measurements = self.measurements[a]
+
+            # Add nonmatches to landmarks_new
+            self.landmarks_new = np.delete(self.landmarks_new, match_idx[:,0], axis=0)
+            not_seen = np.delete(landmarks_im, match_idx[:,1], axis=0)
+            self.landmarks_new = np.vstack((self.landmarks_new, not_seen))
+
+            return E, None, 
             
         else:
-            # Get new landmarks
-            old_lm = match_idx[:,0] < self.num_lm
-            new_lm = match_idx[:,0] >= self.num_lm
+            # Get new landmarks (new ones have landmark value of NaN)
+            new_lm = np.isnan( landmarks_all[match_idx[:,0],0] )
+            old_lm = ~new_lm
 
             # Make array with old landmarks
             n_old = np.sum(old_lm)
             old_lm_numbers = landmarks_all[match_idx[old_lm,0],0]
-            old_lm_matches = im_landmarks[match_idx[old_lm,1]]
+            old_lm_matches = landmarks_im[match_idx[old_lm,1]]
             old_lm_matches[:,0] = old_lm_numbers
             print("\t", n_old, "Existing landmarks")
 
             # Make array with new landmarks
             n_new = np.sum(new_lm)
             lm = np.arange(self.num_lm, self.num_lm + n_new)
-            new_lm_matches = np.vstack(((landmarks_all[match_idx[new_lm,0]], im_landmarks[match_idx[new_lm,1]])))
+            new_lm_matches = np.vstack(((landmarks_all[match_idx[new_lm,0]], landmarks_im[match_idx[new_lm,1]])))
             new_lm_matches[:n_new,0] = lm
             new_lm_matches[n_new:,0] = lm
             print("\t", n_new, "New landmarks")
 
             # Put all togehter & sort
-            self.landmarks_seen = np.vstack((self.landmarks_seen, old_lm_matches, new_lm_matches))
-            a = np.lexsort((self.landmarks_seen[:,1], self.landmarks_seen[:,0]))
-            self.landmarks_seen = self.landmarks_seen[a]
+            self.measurements = np.vstack((self.measurements, old_lm_matches, new_lm_matches))
+            a = np.lexsort((self.measurements[:,1], self.measurements[:,0]))
+            self.measurements = self.measurements[a]
 
             # Delete landmarks from landmark new we just saw, and add in the ones from this image
-            self.landmarks_new = np.delete(self.landmarks_new, match_idx[new_lm,1]-self.num_lm, axis=0)
-            not_seen = np.delete(im_landmarks, match_idx[:,1], axis=0)
-            self.landmarks_new = np.vstack((self.landmarks_new, not_seen))
+            not_seen_all = np.delete(landmarks_all, match_idx[:,0], axis=0) # remove matches
+            not_seen_all = not_seen_all[ np.isnan(not_seen_all[:,0]) ] # keep only kp that don't have landmarks
+            not_seen_im = np.delete(landmarks_im, match_idx[:,1], axis=0) # remove all matches from last image
+            self.landmarks_new = np.vstack((not_seen_all, not_seen_im))
+            
             return E, n_old, n_new
         
 if __name__ == "__main__":
@@ -247,8 +261,20 @@ if __name__ == "__main__":
 
     sfm = StructureFromMotion(K_init, connections=1)
 
-    for i in images[:20]:
+    for i in images[:2]:
         im1 = read_image(i, scale_percent)
         sfm.add_image(im1)
-        
-    print(sfm.landmarks_seen.shape)
+        print(i)
+
+    # plot results
+    fig = plt.figure(figsize=(10,10))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(sfm.Ps[:,0], sfm.Ps[:,1], sfm.Ps[:,2], s=1)
+    for T in sfm.Ts:
+        plotCoordinateFrame(T, ax=ax, k="--", size=1)
+    set_axes_equal(ax)
+    ax.set_zlabel("Z")
+    ax.set_ylabel("Y")
+    ax.set_xlabel("X")
+    ax.view_init(-45, 0)
+    plt.show()
