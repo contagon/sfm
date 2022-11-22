@@ -65,6 +65,8 @@ class StructureFromMotion():
         # Enforce unique matching
         self.match = cv2.BFMatcher(crossCheck=True)
         
+        # These transform world coordinates to camera coordinates. 
+        # To plot, we plot the inverse of this
         self.Ts = np.zeros((0,4,4))
         self.K = K
         self.Ps = np.zeros((0,3))
@@ -132,7 +134,7 @@ class StructureFromMotion():
         ax = fig.add_subplot(111, projection='3d')
         ax.scatter(self.Ps[:,0], self.Ps[:,1], self.Ps[:,2], s=1)
         for T in self.Ts:
-            plotCoordinateFrame(T, ax=ax, k="--", size=1)
+            plotCoordinateFrame(np.linalg.inv(T), ax=ax, k="--", size=1)
         set_axes_equal(ax)
         ax.set_zlabel("Z")
         ax.set_ylabel("Y")
@@ -156,7 +158,7 @@ class StructureFromMotion():
         results = List((lm_sorted[idx[i]:idx[i+1]].astype('int'), mm_sorted[idx[i]:idx[i+1]]) for i in range(len(idx)-1))
         return results
 
-    def optimize(self, tol=1e-4):
+    def optimize(self, tol=1e-4, max_iters=50):
         self.K, self.Ts, self.Ps = levenberg_marquardt(
                                                 residuals, 
                                                 self.K, 
@@ -164,7 +166,7 @@ class StructureFromMotion():
                                                 self.Ps, 
                                                 self._zs, 
                                                 jac, 
-                                                max_iters=50, 
+                                                max_iters=max_iters, 
                                                 lam=0.01, 
                                                 lam_multiplier=4, 
                                                 tol=tol, 
@@ -183,7 +185,7 @@ class StructureFromMotion():
         kp1 = mm1[:,2:4]
         kp2 = mm2[:,2:4]
 
-        # recover pose
+        # recover pose (this pose returns x^2 = T x^1)
         points, R, t, inliers = cv2.recoverPose(E, kp1, kp2, self.K[:3,:3])
         T = np.eye(4)
         T[:3,:3] = R
@@ -206,7 +208,7 @@ class StructureFromMotion():
         # Triangulate points
         Ps_new = cv2.triangulatePoints(self.K@self.Ts[im1_idx], self.K@T, kp1[inliers].T, kp2[inliers].T).T
         Ps_new /= Ps_new[:,3:]
-        
+
         return T, Ps_new[:,:3]
         
     def _pose_from_pts(self, old_lm, new_lm1, new_lm2):
@@ -311,7 +313,7 @@ if __name__ == "__main__":
     K_init = np.array([[3271.7198,    0.,     1539.6885, 0],
              [   0.,     3279.7956, 2027.496, 0],
              [   0.,        0.,        1.,0    ]])
-    scale_percent = 5 # percent of original size
+    scale_percent = 25 # percent of original size
     K_init[:2] *= scale_percent/100
 
     folder = "data/statue"
@@ -320,9 +322,9 @@ if __name__ == "__main__":
 
     sfm = StructureFromMotion(K_init, connections=1)
 
-    for i in images[:2]:
+    for i in images[:4]:
         im1 = read_image(i, scale_percent)
         sfm.add_image(im1)
         if sfm.num_cam > 1:
-            sfm.optimize(1)
+            sfm.optimize(tol=1, max_iters=5)
             sfm.plot()
