@@ -31,7 +31,16 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
         while cost > prev_cost:
             # Find our delta
             A = JtJ + lam*I
-            delta = scipy.sparse.linalg.spsolve(A, b)
+            results = scipy.sparse.linalg.lsmr(A, b)
+            delta = results[0]
+            stop = results[1]
+
+            # Interpret if something bad happened
+            if verbose:
+                if stop in [3,6]:
+                    print(f"{line_start}LSMR failed with code {stop}, due to ill-conditioned matrix")
+                if stop == 7:
+                    print(f"{line_start}LSMR hit max iterations")
             
             # Make copy of current estimate
             Kstar = K.copy()

@@ -165,7 +165,7 @@ class StructureFromMotion():
         pixels = np.array([np.mean(self.measurements[idx[i]:idx[i+1],4:7], axis=0)  for i in range(len(idx)-1)])
         return pixels
 
-    def optimize(self, tol=1e-4, max_iters=50, line_start=""):
+    def optimize(self, tol=1e-4, max_iters=50, verbose=10, line_start=""):
         self.K, self.Ts, self.Ps = levenberg_marquardt(
                                                 residuals, 
                                                 self.K, 
@@ -177,7 +177,7 @@ class StructureFromMotion():
                                                 lam=0.01, 
                                                 lam_multiplier=4, 
                                                 tol=tol, 
-                                                verbose=10,
+                                                verbose=verbose,
                                                 line_start=line_start
                                             )
 

@@ -69,15 +69,16 @@ def _block_sparse(As, indices):
                                 
     return data, (row,col)
 
-
 #-------------  Construct the full Jacobian --------------#
-def jac(K, Ts, Ps, zs):    
+
+@njit
+def _jac_wrapped(K, Ts, Ps, zs):
     # Set things up!
-    matrices = List()
-    indices = List()
+    matrices = list()
+    indices = list()
     M = Ts.shape[0]
-    N = Ps.shape[0]
-    Z = sum([cam_meas[0].shape[0] for cam_meas in zs])*2
+    # N = Ps.shape[0]
+    # Z = sum([cam_meas[0].shape[0] for cam_meas in zs])*2
     
     # Iterate through, saving where everything needs to go
     meas_idx = 0
@@ -101,10 +102,20 @@ def jac(K, Ts, Ps, zs):
             indices.append(  (2*meas_idx, o_lm) )
             
             meas_idx += 1
+
+    return _block_sparse(matrices, indices)
+    
+
+def jac(K, Ts, Ps, zs):    
+    M = Ts.shape[0]
+    N = Ps.shape[0]
+    Z = sum([cam_meas[0].shape[0] for cam_meas in zs])*2
         
-    mat = scipy.sparse.coo_array( _block_sparse(matrices, indices), shape=(Z, 4 + 6*(M-1) + 3*N) )
+    mat = scipy.sparse.coo_array( _jac_wrapped(K, Ts, Ps, zs), shape=(Z, 4 + 6*(M-1) + 3*N) )
             
     return mat.tocsc()
+
+
 
 
 # Used previously when testing

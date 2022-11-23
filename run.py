@@ -29,7 +29,7 @@ def run(scale, plot, in_files, outfile, num_images):
         # Optimize & plot
         if sfm.num_cam > 1:
             print(f"\t Optimizing cam {i} results...")
-            sfm.optimize(tol=1, max_iters=10, line_start="\t\t")
+            sfm.optimize(tol=1, max_iters=10, line_start="\t\t", verbose=1)
             if plot:
                 sfm.plot(block=False)
 
@@ -37,7 +37,7 @@ def run(scale, plot, in_files, outfile, num_images):
 
     # More accurate optimization
     print("Optimizing one last time...")
-    sfm.optimize(tol=1e-3, max_iters=100, line_start="\t")
+    sfm.optimize(tol=1e-3, max_iters=100, line_start="\t", verbose=10)
 
     # Cleanup
     if outfile:
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     # TODO: Way to read initial K in?
     parser = argparse.ArgumentParser(description="Structure from Motion")
     parser.add_argument("-i", "--in_files", type=str, default="data/statue", help="Folder that images are stored in. Images are assumed to be sequentially named.")
-    parser.add_argument("-s", "--scale", type=int, default="25", help="Percentage to scale images down to.")
+    parser.add_argument("-s", "--scale", type=int, default="100", help="Percentage to scale images down to.")
     parser.add_argument("-n", "--num_images", type=int, default=None, help="Use first n images. Defaults to all images.")
     parser.add_argument('-p', '--plot', action='store_true', help='Plot data when each image is read in, as well as at end.')
     parser.add_argument("-o", "--outfile", type=str, default="out.npz", help="Npz file to save resulting intrinsics, poses, 3d points, and 3d pixel colors to. Defaults to out.npz.")
