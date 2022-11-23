@@ -65,11 +65,14 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
         
         # See if it was a small improvement, and if so, be done
         if np.abs(prev_cost - cost) < tol:
-            return K, Ts, Ps
+            break
         else:
             prev_cost = cost
             
-        if verbose and k % 1 == 0:
-            print(f"{k}, \t Cost: {cost} \t Lam: {lam}")
-            
+        if verbose and (k+1) % verbose == 0:
+            print(f"{k+1}, \t Cost: {cost} \t Lam: {lam}")
+
+    if verbose:
+        print(f"Ending cost: {cost}") 
+
     return K, Ts, Ps

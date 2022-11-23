@@ -4,6 +4,7 @@ from numba import njit, NumbaPerformanceWarning
 import cv2
 import os
 from numba.typed import List
+import open3d as o3d
 
 from plot_helpers import plotCoordinateFrame, set_axes_equal
 from jacobian import jac
@@ -71,6 +72,11 @@ class StructureFromMotion():
         self.K = K
         self.Ps = np.zeros((0,3))
 
+        # For visualization
+        self.vis = None
+        self.pc = None
+        self.frames = []
+
     @property
     def num_lm(self):
         if self.measurements.shape[0] == 0:
@@ -128,19 +134,48 @@ class StructureFromMotion():
 
         self.num_cam += 1
 
-    def plot(self):
-        # plot results
-        fig = plt.figure(figsize=(10,10))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(self.Ps[:,0], self.Ps[:,1], self.Ps[:,2], s=1)
-        for T in self.Ts:
-            plotCoordinateFrame(np.linalg.inv(T), ax=ax, k="--", size=1)
-        set_axes_equal(ax)
-        ax.set_zlabel("Z")
-        ax.set_ylabel("Y")
-        ax.set_xlabel("X")
-        # ax.view_init(-45, 0)
-        plt.show()
+    def plot(self, block=False):
+        # Flips everything so it's easily viewable by default
+        flip = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
+
+        # If we're just starting
+        if self.vis is None:
+            # Make point cloud from our points
+            self.pc = o3d.geometry.PointCloud()
+
+            # Make visualization window
+            self.vis = o3d.visualization.Visualizer()
+            self.vis.create_window("SfM")
+            self.vis.add_geometry(self.pc)
+            
+        # Update point cloud
+        self.pc.points = o3d.utility.Vector3dVector(self.Ps)
+        self.pc.transform(flip)
+        self.vis.update_geometry(self.pc)
+
+        # Update frames
+        for i, T in enumerate(self.Ts):
+            # Make new coordinate frame
+            mesh = o3d.geometry.TriangleMesh.create_coordinate_frame()
+            mesh.transform(np.linalg.inv(T))
+            mesh.transform(flip)
+
+            # Remove old one if it's there
+            if i < len(self.frames):
+                self.vis.remove_geometry(self.frames[i])
+                self.frames[i] = mesh
+            else:
+                self.frames.append(mesh)
+
+            # Add to visualization
+            self.vis.add_geometry(mesh)
+
+        # Update visualizer
+        self.vis.poll_events()
+        self.vis.update_renderer()
+    
+        if block:
+            self.vis.run()
         
     @property
     def _zs(self):
@@ -154,7 +189,7 @@ class StructureFromMotion():
         idx = np.where(np.roll(cam_sorted,1)!=cam_sorted)[0]
         idx = np.append(idx, lm_sorted.shape[0])
 
-        # Organize measurements a  bit better
+        # Organize measurements a bit better
         results = List((lm_sorted[idx[i]:idx[i+1]].astype('int'), mm_sorted[idx[i]:idx[i+1]]) for i in range(len(idx)-1))
         return results
 
@@ -180,7 +215,7 @@ class StructureFromMotion():
         self.measurements = self.measurements[a]
     
     def _pose_from_E(self, E, mm1, mm2):
-        # Extract information we need fro measurements
+        # Extract information we need for measurements
         im1_idx = int(mm1[0,1])
         kp1 = mm1[:,2:4]
         kp2 = mm2[:,2:4]
@@ -271,7 +306,7 @@ class StructureFromMotion():
         print("\t", match_idx.shape[0], "Starting # matches")
 
         # Ransac & find essential matrix
-        E, inlier = cv2.findEssentialMat(kp1_match, kp2_match, self.K[:3,:3], method=cv2.RANSAC, threshold=1.5, prob=0.999)
+        E, inlier = cv2.findEssentialMat(kp1_match, kp2_match, self.K[:3,:3], method=cv2.RANSAC, threshold=1, prob=0.999)
         inlier = inlier.flatten().astype('bool')
         match_idx = match_idx[inlier]  
         print("\t", match_idx.shape[0], "After Essential matrix RANSAC")
@@ -301,7 +336,7 @@ class StructureFromMotion():
             new_lm_matches = (landmarks_all[match_idx[new_lm,0]], landmarks_im[match_idx[new_lm,1]])
             print("\t", np.sum(new_lm), "New landmarks")
 
-            # Delete landmarks from landmark new we just saw, and add in the ones from this image
+            # Delete landmarks from landmark new we just saw, and add in the ones that didn't match in image
             not_seen_all = np.delete(landmarks_all, match_idx[:,0], axis=0) # remove matches
             not_seen_all = not_seen_all[ np.isnan(not_seen_all[:,0]) ] # keep only kp that don't have landmarks
             not_seen_im = np.delete(landmarks_im, match_idx[:,1], axis=0) # remove all matches from last image
@@ -322,9 +357,12 @@ if __name__ == "__main__":
 
     sfm = StructureFromMotion(K_init, connections=1)
 
-    for i in images[:4]:
+    for i in images[:5]:
         im1 = read_image(i, scale_percent)
         sfm.add_image(im1)
         if sfm.num_cam > 1:
-            sfm.optimize(tol=1, max_iters=5)
+            sfm.optimize(tol=1, max_iters=10)
             sfm.plot()
+
+    sfm.optimize(tol=1e-3, max_iters=100)
+    sfm.plot(block=True)
