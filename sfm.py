@@ -1,66 +1,19 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from numba import njit, NumbaPerformanceWarning
 import cv2
-import os
 from numba.typed import List
 import open3d as o3d
 
-from plot_helpers import plotCoordinateFrame, set_axes_equal
 from jacobian import jac
 from manifold import SO3_from_vec
 from optimize import levenberg_marquardt
-
-import warnings
-warnings.filterwarnings("ignore", category=NumbaPerformanceWarning)
-np.set_printoptions(suppress=True, precision=3) #, edgeitems=30, linewidth=100000)
-
-@njit
-def to_homogen(p):
-    return np.hstack(( p, np.ones((p.shape[0], 1)) ))
-
-@njit
-def from_homogen(p):
-    p /= p[:,-1:]
-    return p[:,:-1]
-
-def read_image(filename, scale):
-    # load images
-    im = cv2.imread(filename)
-
-    width = int(im.shape[1] * scale / 100)
-    height = int(im.shape[0] * scale / 100)
-    dim = (width, height)
-
-    # resize image
-    im = cv2.resize(im, dim, interpolation = cv2.INTER_AREA)
-    return im
-
-@njit
-def h(K, T, P):
-    p_homo = K@T@to_homogen(P).T
-    return from_homogen(p_homo.T)
-
-@njit
-def residuals(K, Ts, Ps, zs):     
-    # Compute expected measurements
-    steps = [0] + [cam_meas[0].shape[0] for cam_meas in zs]
-    steps = np.cumsum(np.array(steps))
-    res = np.zeros(2*steps[-1])
-
-    for cam_idx, (pt_idx, meas) in enumerate(zs):
-        p_prime = h(K, Ts[cam_idx], Ps[pt_idx])
-        res[2*steps[cam_idx]:2*steps[cam_idx+1]] = (meas - p_prime).flatten()
-    
-    return res
+from cv import residuals, from_homogen
 
 class StructureFromMotion():
-    def __init__(self, K, connections=1):
-        # landmark index, camera index, kp, des
+    def __init__(self, K):
+        # landmark index, camera index, kp, pixel values, des
+        self.measurements = np.zeros((0,1+1+2+3+128), dtype='float32')
+        self.landmarks_new = np.zeros((0,1+1+2+3+128), dtype='float32')
         self.num_cam = 0
-        self.measurements = np.zeros((0,1+1+2+128), dtype='float32')
-        self.landmarks_new = np.zeros((0,1+1+2+128), dtype='float32')
-        self.connections = connections
         
         self.feat = cv2.SIFT_create()
         # Enforce unique matching
@@ -105,11 +58,18 @@ class StructureFromMotion():
         # First, we find keypoints
         kp, des = self.feat.detectAndCompute(im,None)
         kp = np.array([k.pt for k in kp])
+
+        # extract pixels values
+        kp_int = np.round(kp).astype('int')
+        pixels = im[kp_int[:,1], kp_int[:,0]]
+        if pixels.dtype == 'uint8':
+            pixels = pixels / np.max(pixels)
         
         landmarks_im = np.hstack([
                             np.full((kp.shape[0], 1), np.NaN),
                             np.full((kp.shape[0], 1), self.num_cam), 
-                            kp, 
+                            kp,
+                            pixels,
                             des
                         ]).astype('float32')
     
@@ -134,7 +94,7 @@ class StructureFromMotion():
 
         self.num_cam += 1
 
-    def plot(self, block=False):
+    def plot(self, block=True):
         # Flips everything so it's easily viewable by default
         flip = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
 
@@ -150,6 +110,7 @@ class StructureFromMotion():
             
         # Update point cloud
         self.pc.points = o3d.utility.Vector3dVector(self.Ps)
+        self.pc.colors = o3d.utility.Vector3dVector(self.pixels)
         self.pc.transform(flip)
         self.vis.update_geometry(self.pc)
 
@@ -193,7 +154,18 @@ class StructureFromMotion():
         results = List((lm_sorted[idx[i]:idx[i+1]].astype('int'), mm_sorted[idx[i]:idx[i+1]]) for i in range(len(idx)-1))
         return results
 
-    def optimize(self, tol=1e-4, max_iters=50):
+    @property
+    def pixels(self):
+        # Get where to split everything
+        lm = self.measurements[:,0]
+        idx = np.where(np.roll(lm,1)!=lm)[0]
+        idx = np.append(idx, lm.shape[0])
+
+        # start averaging pixels :)
+        pixels = np.array([np.mean(self.measurements[idx[i]:idx[i+1],4:7], axis=0)  for i in range(len(idx)-1)])
+        return pixels
+
+    def optimize(self, tol=1e-4, max_iters=50, line_start=""):
         self.K, self.Ts, self.Ps = levenberg_marquardt(
                                                 residuals, 
                                                 self.K, 
@@ -205,12 +177,17 @@ class StructureFromMotion():
                                                 lam=0.01, 
                                                 lam_multiplier=4, 
                                                 tol=tol, 
-                                                verbose=10
+                                                verbose=10,
+                                                line_start=line_start
                                             )
+
+    def save(self, filename):
+        np.savez(filename, K=self.K, P=self.Ps, T=self.Ts, pixels=self.pixels)
 
     def _add_measurements(self, new_mm):
         # Put all togehter & sort
         self.measurements = np.vstack((self.measurements, new_mm))
+        # Sort by landmark, then by camera
         a = np.lexsort((self.measurements[:,1], self.measurements[:,0]))
         self.measurements = self.measurements[a]
     
@@ -225,6 +202,9 @@ class StructureFromMotion():
         T = np.eye(4)
         T[:3,:3] = R
         T[:3,3] = t.flatten()
+
+        # needs to be T^i_w not T^i_{i-1}
+        T = T@self.Ts[im1_idx]
 
         # Put good measurements into measurement matrix
         inliers = inliers.flatten() != 0
@@ -244,10 +224,13 @@ class StructureFromMotion():
         Ps_new = cv2.triangulatePoints(self.K@self.Ts[im1_idx], self.K@T, kp1[inliers].T, kp2[inliers].T).T
         Ps_new /= Ps_new[:,3:]
 
+        # Put into global frame (Ts is T^{i-1}_w, Ps are in frame {i-1})
+        Ps_new = Ps_new@np.linalg.inv(self.Ts[im1_idx]).T
+
         return T, Ps_new[:,:3]
         
     def _pose_from_pts(self, old_lm, new_lm1, new_lm2):
-        # Convert kp idx -> landmark index -> 3d point
+        # Get kps and landmark indices for previously seen landmarks
         kps_old = old_lm[:,2:4]
         lms_old = old_lm[:,0].astype('int')
         
@@ -257,7 +240,7 @@ class StructureFromMotion():
         T = np.eye(4)
         T[:3,:3] = SO3_from_vec(rvec.flatten())
         T[:3,3] = tvec.flatten()
-        print("\t", inliers.shape[0], "are kept when running PnP")
+        print("\t", inliers.shape[0], " existing landmarks are kept when running PnP")
 
         # Put everything where it needs to go
         self._add_measurements(old_lm[inliers])
@@ -282,7 +265,7 @@ class StructureFromMotion():
         # Remove outliers, insert into unmatched array
         bad_mm = np.vstack((new_lm1[~inliers], new_lm2[~inliers]))
         self.landmarks_new = np.vstack((self.landmarks_new, bad_mm))
-        print("\t", np.sum(inliers), "were kept when triangulating")
+        print("\t", np.sum(inliers), "new landmarks were kept when triangulating")
 
         return T, Ps[inliers]
             
@@ -296,7 +279,7 @@ class StructureFromMotion():
         landmarks_all = landmarks_all[ landmarks_all[:,1] == cam_idx-1 ]
 
         # BFMatcher with default params
-        knn_matches = self.match.match(landmarks_all[:,4:], landmarks_im[:,4:])
+        knn_matches = self.match.match(landmarks_all[:,7:], landmarks_im[:,7:])
         knn_matches = sorted(knn_matches, key = lambda x : x.distance)
 
         # Get matches
@@ -344,25 +327,3 @@ class StructureFromMotion():
             
             return E, old_lm_matches, new_lm_matches
         
-if __name__ == "__main__":
-    K_init = np.array([[3271.7198,    0.,     1539.6885, 0],
-             [   0.,     3279.7956, 2027.496, 0],
-             [   0.,        0.,        1.,0    ]])
-    scale_percent = 25 # percent of original size
-    K_init[:2] *= scale_percent/100
-
-    folder = "data/statue"
-    valid_imgs = [".jpg", ".png"]
-    images = [os.path.join(folder, f) for f in sorted(os.listdir(folder)) if os.path.splitext(f)[1].lower() in valid_imgs]
-
-    sfm = StructureFromMotion(K_init, connections=1)
-
-    for i in images[:5]:
-        im1 = read_image(i, scale_percent)
-        sfm.add_image(im1)
-        if sfm.num_cam > 1:
-            sfm.optimize(tol=1, max_iters=10)
-            sfm.plot()
-
-    sfm.optimize(tol=1e-3, max_iters=100)
-    sfm.plot(block=True)

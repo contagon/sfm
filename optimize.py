@@ -2,7 +2,7 @@ import numpy as np
 import scipy
 from manifold import K_from_vec, vec_from_K, SE3_from_vec, vec_from_SE3
 
-def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, lam_multiplier=10.0, max_iters=100, tol=1e-8, verbose=False):
+def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, lam_multiplier=10.0, max_iters=100, tol=1e-8, verbose=False, line_start=""):
     # Loosely adapted from https://github.com/jjhartmann/Levenberg-Marquardt-Algorithm/blob/master/LMA.py
     K = K_init.copy()
     Ts = Ts_init.copy()
@@ -15,7 +15,7 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
     lam_init = lam
     
     if verbose:
-        print(f"Starting cost: {prev_cost}")
+        print(f"{line_start}Starting cost: {prev_cost}")
 
     for k in range(max_iters):
         # Make right hand side
@@ -52,7 +52,7 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
                 lam *= lam_multiplier
                 
             if lam > 1e9:
-                print("LM failed to converge")
+                print("{line_start}LM failed to converge")
                 return K, Ts, Ps
                         
         # If our step worked, increment and keep going
@@ -70,9 +70,9 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
             prev_cost = cost
             
         if verbose and (k+1) % verbose == 0:
-            print(f"{k+1}, \t Cost: {cost} \t Lam: {lam}")
+            print(f"{line_start}{k+1}, \t Cost: {cost} \t Lam: {lam}")
 
     if verbose:
-        print(f"Ending cost: {cost}") 
+        print(f"{line_start}Ending cost: {cost}") 
 
     return K, Ts, Ps

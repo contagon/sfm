@@ -1,8 +1,12 @@
 import numpy as np
-from numba import njit
+from numba import njit, NumbaPerformanceWarning
 from numba.typed import List
 from manifold import skew
 import scipy
+
+# Since we don't use contiguous arrays for all these, numba gives annoying warnings.
+import warnings
+warnings.filterwarnings("ignore", category=NumbaPerformanceWarning)
 
 # projection function
 @njit
