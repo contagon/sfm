@@ -29,7 +29,7 @@ def run(scale, plot, in_files, outfile, num_images):
         # Optimize & plot
         if sfm.num_cam > 1:
             print(f"\t Optimizing cam {i} results...")
-            sfm.optimize(tol=1, max_iters=10, line_start="\t\t", verbose=1)
+            sfm.optimize(tol=1, max_iters=5, line_start="\t\t", verbose=1)
             if plot:
                 sfm.plot(block=False)
 

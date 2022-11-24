@@ -16,8 +16,9 @@ class StructureFromMotion():
         self.num_cam = 0
         
         self.feat = cv2.SIFT_create()
-        # Enforce unique matching
-        self.match = cv2.BFMatcher(crossCheck=True)
+        # Use both matchers to enforce unique matching
+        self.bf_matcher = cv2.BFMatcher(crossCheck=True)
+        self.flann_matcher = cv2.FlannBasedMatcher()
         
         # These transform world coordinates to camera coordinates. 
         # To plot, we plot the inverse of this
@@ -278,12 +279,22 @@ class StructureFromMotion():
         # Only use from last camera
         landmarks_all = landmarks_all[ landmarks_all[:,1] == cam_idx-1 ]
 
-        # BFMatcher with default params
-        knn_matches = self.match.match(landmarks_all[:,7:], landmarks_im[:,7:])
-        knn_matches = sorted(knn_matches, key = lambda x : x.distance)
+        # Match with FLANN, then crosscheck with BF
+        des1 = landmarks_all[:,7:].copy()
+        des2 = landmarks_im[:,7:].copy()
+        match_flann = self.flann_matcher.match(des1, des2)
+        match_flann = np.array([[m.queryIdx, m.trainIdx] for m in match_flann])
+        match_flann1 = match_flann[:,0]
+        match_flann2 = np.unique(match_flann[:,1]) # since there's no crosscheck yet, these may not be unique
+        des1 = des1[match_flann1]
+        des2 = des2[match_flann2]
+
+        match_bf = self.bf_matcher.match(des1, des2)
+        match_bf = sorted(match_bf, key = lambda x : x.distance)
+        match_bf = np.array([[m.queryIdx, m.trainIdx] for m in match_bf])
+        match_idx = np.column_stack((match_flann1[match_bf[:,0]], match_flann2[match_bf[:,1]]))
 
         # Get matches
-        match_idx = np.array([[m.queryIdx, m.trainIdx] for m in knn_matches])
         kp1_match = landmarks_all[match_idx[:,0], 2:4]
         kp2_match = landmarks_im[match_idx[:,1], 2:4]
         print("\t", match_idx.shape[0], "Starting # matches")

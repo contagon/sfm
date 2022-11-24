@@ -2,7 +2,7 @@ import numpy as np
 import open3d as o3d
 import sys
 
-data = np.loadz(sys.arv[1])
+data = np.load(sys.argv[1])
 
 # Flips everything so it's easily viewable by default
 flip = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
