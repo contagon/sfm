@@ -29,7 +29,11 @@ def run(scale, plot, in_files, outfile, num_images):
         # Optimize & plot
         if sfm.num_cam > 1:
             print(f"\t Optimizing cam {i} results...")
-            sfm.optimize(tol=1, max_iters=5, line_start="\t\t", verbose=1)
+            sfm.optimize(tol=1, max_iters=2, line_start="\t\t", verbose=1)
+            # iteratively save
+            temp = os.path.splitext(outfile)
+            sfm.save(f"{temp[0]}_{i}{temp[1]}")
+
             if plot:
                 sfm.plot(block=False)
 
@@ -37,16 +41,16 @@ def run(scale, plot, in_files, outfile, num_images):
 
     # More accurate optimization
     print("Optimizing one last time...")
-    sfm.optimize(tol=1e-3, max_iters=100, line_start="\t", verbose=10)
+    sfm.optimize(tol=1e-3, max_iters=20, line_start="\t", verbose=10)
 
-    # Cleanup
     if outfile:
         sfm.save(outfile)
-    if plot:
-        sfm.plot()
 
     print()
     print("~~~~~~~ Finished! ~~~~~~~~~~")
+
+    if plot:
+        sfm.plot()
 
 
 if __name__ == "__main__":

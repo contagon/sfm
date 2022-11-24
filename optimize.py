@@ -23,8 +23,11 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
         JtJ = J.T@J
         
         # Make left hand side
+        # Try cauchy kernel
+        c = 1
         r = residual(K, Ts, Ps, zs)
-        b = J.T@r
+        w = 1 / (1 + (r/c)**2)
+        b = J.T@(r*w)
             
         # Run with this linearization
         cost = prev_cost + 1
@@ -61,7 +64,7 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
                 lam *= lam_multiplier
                 
             if lam > 1e9:
-                print("{line_start}LM failed to converge")
+                print(f"{line_start}LM failed to converge")
                 return K, Ts, Ps
                         
         # If our step worked, increment and keep going
