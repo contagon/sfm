@@ -198,13 +198,16 @@ class StructureFromMotion():
         kp1 = mm1[:,2:4]
         kp2 = mm2[:,2:4]
 
+        # Make sure we're only estimating from one other camera
+        assert len(np.unique(mm1[:,1])) == 1
+
         # recover pose (this pose returns x^2 = T x^1)
         points, R, t, inliers = cv2.recoverPose(E, kp1, kp2, self.K[:3,:3])
         T = np.eye(4)
         T[:3,:3] = R
         T[:3,3] = t.flatten()
 
-        # needs to be T^i_w not T^i_{i-1}
+        # needs to be T^i_w not T^i_{i-1} (multiply by T^{i-1}_w)
         T = T@self.Ts[im1_idx]
 
         # Put good measurements into measurement matrix
@@ -224,9 +227,6 @@ class StructureFromMotion():
         # Triangulate points
         Ps_new = cv2.triangulatePoints(self.K@self.Ts[im1_idx], self.K@T, kp1[inliers].T, kp2[inliers].T).T
         Ps_new /= Ps_new[:,3:]
-
-        # Put into global frame (Ts is T^{i-1}_w, Ps are in frame {i-1})
-        Ps_new = Ps_new@np.linalg.inv(self.Ts[im1_idx]).T
 
         return T, Ps_new[:,:3]
         
@@ -251,33 +251,56 @@ class StructureFromMotion():
 
 
         # Triangulate all the other ones
-        im1_idx = int(new_lm1[0,1])
-        Ps = cv2.triangulatePoints(self.K@self.Ts[im1_idx], self.K@T, new_lm1[:,2:4].T, new_lm2[:,2:4].T)
-        Ps = from_homogen(Ps.T)
+        all_Ps = []
+        outliers = []
+        cams_with_matches = np.sort(np.unique(new_lm1[:,1])).astype('int')
+        for cam in cams_with_matches:
+            # Get this cameras indices
+            this_cam_matches = np.where(new_lm1[:,1] == cam)[0]
+            cam_lm1 = new_lm1[this_cam_matches]
+            cam_lm2 = new_lm2[this_cam_matches]
 
-        inliers = np.logical_and(Ps[:,2] > 0, np.linalg.norm(Ps, axis=1) < 50)
-        n = np.sum(inliers)
-        lm = np.arange(self.num_lm, self.num_lm+n)
-        mm_good = np.vstack((new_lm1[inliers], new_lm2[inliers]))
-        mm_good[:n,0] = lm
-        mm_good[n:,0] = lm
-        self._add_measurements(mm_good) 
+            # Triangulate
+            Ps = cv2.triangulatePoints(self.K@self.Ts[cam], self.K@T, cam_lm1[:,2:4].T, cam_lm2[:,2:4].T)
+            Ps /= Ps[3] # comes out with each point as a different column
+            # Make sure it's not behind either camera (have to switch frames) or crazy far away
+            inliers = np.vstack(( (self.Ts[cam]@Ps)[2] > 0, (T@Ps)[2] > 0, np.linalg.norm(Ps[:3], axis=0) < 50 )).all(axis=0)
+            all_Ps.append(Ps.T[inliers,:3])
+
+            # Save inlier measurements
+            n = np.sum(inliers)
+            lm = np.arange(self.num_lm, self.num_lm+n)
+            mm_good = np.vstack((cam_lm1[inliers], cam_lm2[inliers]))
+            mm_good[:n,0] = lm
+            mm_good[n:,0] = lm
+            self._add_measurements(mm_good) 
+
+            # Save outlier indices
+            outliers.append( this_cam_matches[~inliers] )
 
         # Remove outliers, insert into unmatched array
-        bad_mm = np.vstack((new_lm1[~inliers], new_lm2[~inliers]))
+        outliers = np.concatenate(outliers)
+        bad_mm = np.vstack((new_lm1[outliers], new_lm2[outliers]))
         self.landmarks_new = np.vstack((self.landmarks_new, bad_mm))
-        print("\t", np.sum(inliers), "new landmarks were kept when triangulating")
 
-        return T, Ps[inliers]
+        all_Ps = np.vstack(all_Ps)
+        print("\t", all_Ps.shape[0], "new landmarks were kept when triangulating")
+
+        return T, all_Ps
             
     def _register_image(self, cam_idx, landmarks_im):
         print(f"Connecting Camera {cam_idx}")
         
-        # Sort through seen landmarks
-        landmarks_all = np.vstack((self.landmarks, self.landmarks_new))
+        # use only unmatched kp from previous camera
+        new = self.landmarks_new[ self.landmarks_new[:,1] == cam_idx-1 ] 
+        # Only use matched landmarks from previous 4 camers
+        previous = self.landmarks
+        previous_mask = previous[:,1] == cam_idx-1
+        for i in range(2,5):
+            previous_mask = np.logical_or(previous_mask, previous[:,1] == cam_idx-i)
+        previous = previous[previous_mask]
 
-        # Only use from last camera
-        landmarks_all = landmarks_all[ landmarks_all[:,1] == cam_idx-1 ]
+        landmarks_all = np.vstack((previous, new))
 
         # Match with FLANN, then crosscheck with BF
         des1 = landmarks_all[:,7:].copy()
@@ -295,15 +318,32 @@ class StructureFromMotion():
         match_idx = np.column_stack((match_flann1[match_bf[:,0]], match_flann2[match_bf[:,1]]))
 
         # Get matches
-        kp1_match = landmarks_all[match_idx[:,0], 2:4]
-        kp2_match = landmarks_im[match_idx[:,1], 2:4]
+        landmarks1_matched = landmarks_all[match_idx[:,0]]
+        landmarks2_matched = landmarks_im[match_idx[:,1]]
         print("\t", match_idx.shape[0], "Starting # matches")
 
-        # Ransac & find essential matrix
-        E, inlier = cv2.findEssentialMat(kp1_match, kp2_match, self.K[:3,:3], method=cv2.RANSAC, threshold=1, prob=0.999)
-        inlier = inlier.flatten().astype('bool')
-        match_idx = match_idx[inlier]  
-        print("\t", match_idx.shape[0], "After Essential matrix RANSAC")
+        # match indices to remove later
+        outliers = []
+
+        # Iterate through all camera matches, starting with first one 
+        cams_with_matches = np.sort(np.unique(landmarks1_matched[:,1])).astype('int')
+        for cam in cams_with_matches:
+            # Get keypoints
+            this_cam_matches = np.where(landmarks1_matched[:,1] == cam)[0]
+            if len(this_cam_matches) > 6:
+                kp1_match = landmarks1_matched[this_cam_matches, 2:4]
+                kp2_match = landmarks2_matched[this_cam_matches, 2:4]
+
+                # Ransac & find essential matrix
+                E, inlier = cv2.findEssentialMat(kp1_match, kp2_match, self.K[:3,:3], method=cv2.RANSAC, threshold=1, prob=0.999)
+                inlier = inlier.flatten().astype('bool')
+                outliers.append( this_cam_matches[~inlier] )
+                print(f"\t Cam {cam} had {inlier.shape[0]} matches, {np.sum(inlier)} after Essential matrix RANSAC")
+            else:
+                print(f"\t Cam {cam} had {this_cam_matches.shape} matches")
+
+        # remove all outliers we found
+        match_idx = np.delete(match_idx, np.concatenate(outliers), axis=0)
 
         # If it's the first iteration
         if self.num_lm == 0:

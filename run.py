@@ -7,6 +7,11 @@ from cv import read_image
 np.set_printoptions(suppress=True, precision=3) #, edgeitems=30, linewidth=100000)
 
 def run(scale, plot, in_files, outfile, num_images):
+    # Make sure we have somewhere to save it
+    path = os.path.split(outfile)[0]
+    if path != "":
+        os.makedirs(path, exist_ok=True)
+
     # Initialize K
     K_init = np.array([[3271.7198,    0.,     1539.6885, 0],
              [   0.,     3279.7956, 2027.496, 0],
@@ -61,6 +66,6 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--scale", type=int, default="100", help="Percentage to scale images down to.")
     parser.add_argument("-n", "--num_images", type=int, default=None, help="Use first n images. Defaults to all images.")
     parser.add_argument('-p', '--plot', action='store_true', help='Plot data when each image is read in, as well as at end.')
-    parser.add_argument("-o", "--outfile", type=str, default="out.npz", help="Npz file to save resulting intrinsics, poses, 3d points, and 3d pixel colors to. Defaults to out.npz.")
+    parser.add_argument("-o", "--outfile", type=str, default="results/out.npz", help="Npz file to save resulting intrinsics, poses, 3d points, and 3d pixel colors to. Defaults to out.npz.")
     args = vars(parser.parse_args())
     run(**args)
