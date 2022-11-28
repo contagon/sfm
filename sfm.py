@@ -6,20 +6,33 @@ import open3d as o3d
 from jacobian import jac
 from manifold import SO3_from_vec
 from optimize import levenberg_marquardt
-from cv import residuals, from_homogen
+from cv import residuals, from_homogen, plotMatches
+
+import matplotlib
+matplotlib.use('TkAgg')
 
 class StructureFromMotion():
-    def __init__(self, K):
+    def __init__(self, K, feat="sift"):
+        # setup feature matching
+        self.feat_type = feat
+        if feat == "sift":
+            self.feat = cv2.SIFT_create(nfeatures=10000)
+            # Use both matchers to enforce unique matching
+            self.flann_matcher = cv2.FlannBasedMatcher()
+            self.bf_matcher = cv2.BFMatcher(crossCheck=True)
+        elif feat == "orb":
+            self.feat = cv2.ORB_create(nfeatures=10000)
+            self.bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        
         # landmark index, camera index, kp, pixel values, des
-        self.measurements = np.zeros((0,1+1+2+3+128), dtype='float32')
-        self.landmarks_new = np.zeros((0,1+1+2+3+128), dtype='float32')
+        feat_size = 128 if self.feat_type == "sift" else 32
+        print(self.feat)
+        self.measurements = np.zeros((0,1+1+2+3+feat_size), dtype='float32')
+        self.landmarks_new = np.zeros((0,1+1+2+3+feat_size), dtype='float32')
         self.num_cam = 0
+        self.im = []
         
-        self.feat = cv2.SIFT_create()
-        # Use both matchers to enforce unique matching
-        self.bf_matcher = cv2.BFMatcher(crossCheck=True)
-        self.flann_matcher = cv2.FlannBasedMatcher()
-        
+
         # These transform world coordinates to camera coordinates. 
         # To plot, we plot the inverse of this
         self.Ts = np.zeros((0,4,4))
@@ -56,9 +69,11 @@ class StructureFromMotion():
             return self.measurements[idx]
         
     def add_image(self, im):
+        self.im.append(im)
         # First, we find keypoints
         kp, des = self.feat.detectAndCompute(im,None)
         kp = np.array([k.pt for k in kp])
+        print(f"\t Found {kp.shape[0]} keypoints")
 
         # extract pixels values
         kp_int = np.round(kp).astype('int')
@@ -164,6 +179,8 @@ class StructureFromMotion():
 
         # start averaging pixels :)
         pixels = np.array([np.mean(self.measurements[idx[i]:idx[i+1],4:7], axis=0)  for i in range(len(idx)-1)])
+        # flip from bgr to rgb
+        pixels[:,[0,2]] = pixels[:,[2,0]]
         return pixels
 
     def optimize(self, tol=1e-4, max_iters=50, verbose=10, line_start=""):
@@ -264,7 +281,7 @@ class StructureFromMotion():
             Ps = cv2.triangulatePoints(self.K@self.Ts[cam], self.K@T, cam_lm1[:,2:4].T, cam_lm2[:,2:4].T)
             Ps /= Ps[3] # comes out with each point as a different column
             # Make sure it's not behind either camera (have to switch frames) or crazy far away
-            inliers = np.vstack(( (self.Ts[cam]@Ps)[2] > 0, (T@Ps)[2] > 0, np.linalg.norm(Ps[:3], axis=0) < 50 )).all(axis=0)
+            inliers = np.vstack(( (self.Ts[cam]@Ps)[2] > 0, (T@Ps)[2] > 0, np.linalg.norm(Ps[:3], axis=0) < 15 )).all(axis=0)
             all_Ps.append(Ps.T[inliers,:3])
 
             # Save inlier measurements
@@ -305,17 +322,24 @@ class StructureFromMotion():
         # Match with FLANN, then crosscheck with BF
         des1 = landmarks_all[:,7:].copy()
         des2 = landmarks_im[:,7:].copy()
-        match_flann = self.flann_matcher.match(des1, des2)
-        match_flann = np.array([[m.queryIdx, m.trainIdx] for m in match_flann])
-        match_flann1 = match_flann[:,0]
-        match_flann2 = np.unique(match_flann[:,1]) # since there's no crosscheck yet, these may not be unique
-        des1 = des1[match_flann1]
-        des2 = des2[match_flann2]
 
-        match_bf = self.bf_matcher.match(des1, des2)
-        match_bf = sorted(match_bf, key = lambda x : x.distance)
-        match_bf = np.array([[m.queryIdx, m.trainIdx] for m in match_bf])
-        match_idx = np.column_stack((match_flann1[match_bf[:,0]], match_flann2[match_bf[:,1]]))
+        if self.feat_type == "sift":
+            match_flann = self.flann_matcher.match(des1, des2)
+            match_flann = np.array([[m.queryIdx, m.trainIdx] for m in match_flann])
+            match_flann1 = match_flann[:,0]
+            match_flann2 = np.unique(match_flann[:,1]) # since there's no crosscheck yet, these may not be unique
+            des1 = des1[match_flann1]
+            des2 = des2[match_flann2]
+            
+            match_bf = self.bf_matcher.match(des1, des2)
+            match_bf = sorted(match_bf, key = lambda x : x.distance)
+            match_bf = np.array([[m.queryIdx, m.trainIdx] for m in match_bf])
+            match_idx = np.column_stack((match_flann1[match_bf[:,0]], match_flann2[match_bf[:,1]]))
+
+        elif self.feat_type == "orb":
+            match_bf = self.bf_matcher.match(des1.astype('uint8'), des2.astype('uint8'))
+            match_bf = sorted(match_bf, key = lambda x : x.distance)
+            match_idx = np.array([[m.queryIdx, m.trainIdx] for m in match_bf])
 
         # Get matches
         landmarks1_matched = landmarks_all[match_idx[:,0]]
@@ -340,7 +364,8 @@ class StructureFromMotion():
                 outliers.append( this_cam_matches[~inlier] )
                 print(f"\t Cam {cam} had {inlier.shape[0]} matches, {np.sum(inlier)} after Essential matrix RANSAC")
             else:
-                print(f"\t Cam {cam} had {this_cam_matches.shape} matches")
+                outliers.append(this_cam_matches)
+                # print(f"\t Cam {cam} had {this_cam_matches.shape} matches")
 
         # remove all outliers we found
         match_idx = np.delete(match_idx, np.concatenate(outliers), axis=0)
@@ -360,6 +385,7 @@ class StructureFromMotion():
             # Get new landmarks (new ones have landmark value of NaN)
             new_lm = np.isnan( landmarks_all[match_idx[:,0],0] )
             old_lm = ~new_lm
+            # plotMatches(self.im[cam_idx-1], self.im[cam_idx], landmarks_all[match_idx[old_lm,0],2:4], landmarks_im[match_idx[old_lm,1],2:4])
 
             # Make array with old landmarks
             old_lm_matches = landmarks_im[match_idx[old_lm,1]]
