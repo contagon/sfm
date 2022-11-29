@@ -46,7 +46,7 @@ def run(scale, plot, in_files, outfile, num_images, feat):
             print()
 
     if num_images is None:
-        sfm._close_loop()
+        sfm.close_loop()
 
     # More accurate optimization
     print("Optimizing one last time...")

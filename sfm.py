@@ -6,10 +6,7 @@ import open3d as o3d
 from jacobian import jac
 from manifold import SO3_from_vec
 from optimize import levenberg_marquardt
-from cv import residuals, from_homogen, plotMatches
-
-import matplotlib
-matplotlib.use('TkAgg')
+from cv import residuals
 
 class StructureFromMotion():
     def __init__(self, K, feat="sift"):
@@ -92,7 +89,6 @@ class StructureFromMotion():
             self.landmarks_new = landmarks_im
         else:
             # Next, we connect images together
-            # TODO: Fix so you can check with multiple images at same time
             E, repeated_lm, new_lm = self._register_image(self.num_cam, landmarks_im)
 
             # # Get an estimate for this frame & new landmarks
@@ -329,7 +325,6 @@ class StructureFromMotion():
         print(f"Connecting Camera {cam_idx}")
         print(f"\t Found {landmarks_im.shape[0]} keypoints")
 
-        print(np.unique(self.landmarks_new[:,1]))
         # use only unmatched kp from previous camera
         new = self.landmarks_new[ self.landmarks_new[:,1] == cam_idx-1 ] 
         # Only use matched landmarks from previous 4 camers
@@ -339,7 +334,7 @@ class StructureFromMotion():
             previous_mask = np.logical_or(previous_mask, previous[:,1] == cam_idx-i)
         previous = previous[previous_mask]
 
-        landmarks_all = np.vstack((previous, new))
+        landmarks_all = np.vstack((new, previous))
 
         # Match landmarks
         des1 = landmarks_all[:,7:].copy()
@@ -401,49 +396,32 @@ class StructureFromMotion():
             print("\t", np.sum(new_lm), "New landmarks")
 
             # Delete landmarks from landmark new we just saw, and add in the ones that didn't match in image
-            not_seen_all = np.delete(landmarks_all, match_idx[:,0], axis=0) # remove matches
-            not_seen_all = not_seen_all[ np.isnan(not_seen_all[:,0]) ] # keep only kp that don't have landmarks
+            new_lm_matches_idx = np.where(self.landmarks_new[:,1] == cam_idx-1)[0][ match_idx[new_lm,0] ]
+            self.landmarks_new = np.delete(self.landmarks_new, new_lm_matches_idx, axis=0) # remove matches
             not_seen_im = np.delete(landmarks_im, match_idx[:,1], axis=0) # remove all matches from last image
-            self.landmarks_new = np.vstack((not_seen_all, not_seen_im))
-            
+            self.landmarks_new = np.vstack((self.landmarks_new, not_seen_im))
+
             return E, old_lm_matches, new_lm_matches
         
-    def _close_loop(self):
+    def close_loop(self):
         cam1_idx = self.num_cam-1
         cam2_idx = 0
         print(f"Connecting Cam {cam1_idx} and Cam {cam2_idx} for a loop closure..")
 
         # Get all matches in both
         landmarks1 = np.vstack((
-                            self.measurements[self.measurements[:,1] == cam1_idx],
                             self.landmarks_new[self.landmarks_new[:,1] == cam1_idx],
+                            self.measurements[self.measurements[:,1] == cam1_idx],
                         ))
-        # TODO: Somethings wrong with landmarks_new, it only has elements from the last 2 images
         landmarks2 = np.vstack((
-                            self.measurements[self.measurements[:,1] == cam2_idx],
                             self.landmarks_new[self.landmarks_new[:,1] == cam2_idx],
+                            self.measurements[self.measurements[:,1] == cam2_idx],
                         ))
         
         # Match them
         des1 = landmarks1[:,7:].copy()
         des2 = landmarks2[:,7:].copy()
-        if self.feat_type == "sift":
-            match_flann = self.flann_matcher.match(des1, des2)
-            match_flann = np.array([[m.queryIdx, m.trainIdx] for m in match_flann])
-            match_flann1 = match_flann[:,0]
-            match_flann2 = np.unique(match_flann[:,1]) # since there's no crosscheck yet, these may not be unique
-            des1 = des1[match_flann1]
-            des2 = des2[match_flann2]
-            
-            match_bf = self.bf_matcher.match(des1, des2)
-            match_bf = sorted(match_bf, key = lambda x : x.distance)
-            match_bf = np.array([[m.queryIdx, m.trainIdx] for m in match_bf])
-            match_idx = np.column_stack((match_flann1[match_bf[:,0]], match_flann2[match_bf[:,1]]))
-
-        elif self.feat_type == "orb":
-            match_bf = self.bf_matcher.match(des1.astype('uint8'), des2.astype('uint8'))
-            match_bf = sorted(match_bf, key = lambda x : x.distance)
-            match_idx = np.array([[m.queryIdx, m.trainIdx] for m in match_bf])
+        match_idx = self._match(des1, des2)
 
         # Find inliers
         kp1_match = landmarks1[match_idx[:,0], 2:4]
@@ -454,13 +432,21 @@ class StructureFromMotion():
         match_idx = match_idx[inlier]
         print(f"\t {inlier.shape[0]} matches, {np.sum(inlier)} after Essential matrix RANSAC")
 
-        # Insert into measurements
+        # Seperate into which have been seen or not before
         matched1 = landmarks1[match_idx[:,0]]
         matched2 = landmarks2[match_idx[:,1]]
         new_lm = np.logical_and(np.isnan(matched1[:,0]), np.isnan(matched2[:,0]))
-        old_lm = ~new_lm
+        old_lm = np.logical_xor(np.isnan(matched1[:,0]), np.isnan(matched2[:,0]))
+        old_old_lm = np.vstack((~np.isnan(matched1[:,0]), ~np.isnan(matched2[:,0]), matched1[:,0]==matched2[:,0])).all(axis=0) # make sure not to include matches we already have!
 
-        # Make array with old landmarks
+
+        # Renumber landmarks that were seen in both images! (default to smaller landmark number) (will be sorted later)
+        for m, n in zip(matched1[old_old_lm,0], matched2[old_old_lm,0]):
+            self.measurements[self.measurements[:,0] == m, 0] = n
+        self.Ps = np.delete(self.Ps, matched1[old_old_lm,0].astype('int'), axis=0)
+        print("\t", np.sum(old_old_lm), "Landmarks seen in both images before")
+
+        # Make array with landmarks that were seen once before
         old_lm_matches1 = matched1[old_lm]
         old_lm_matches2 = matched2[old_lm]
         mask1 = np.isnan(old_lm_matches1[:,0])
@@ -470,9 +456,13 @@ class StructureFromMotion():
 
         old_lm = np.vstack((old_lm_matches1, old_lm_matches2))
         self._add_measurements(old_lm)
-        print("\t", old_lm_matches1.shape[0], "Existing landmarks")
+        print("\t", old_lm_matches1.shape[0], "Landmarks seen in one image before")
 
-        # TODO: This only connects existing landmarks, add to it to get all landmarks!
+
+        # TODO: self.landmarks_new was NOT updated from all this!
+
+        # TODO: This only connects existing landmarks, add to it to get all landmarks that hadn't been seen in either image before
+        # In my experience there was very few of them
         # Make array with new landmarks
         # new_lm_matches = (landmarks_all[match_idx[new_lm,0]], landmarks_im[match_idx[new_lm,1]])
         # print("\t", np.sum(new_lm), "New landmarks")
@@ -483,4 +473,3 @@ class StructureFromMotion():
         # not_seen_im = np.delete(landmarks_im, match_idx[:,1], axis=0) # remove all matches from last image
         # self.landmarks_new = np.vstack((not_seen_all, not_seen_im))
 
-        # TODO: self.landmarks_new was NOT updated from all this!
