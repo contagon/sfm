@@ -28,6 +28,7 @@ def run(scale, plot, in_files, outfile, num_images, feat):
     # Iterate through, lightly optimizing as we add each image
     for i, file in enumerate(images[:num_images]):
         # Add image to sfm
+        print(f"Adding image {file}")
         im1 = read_image(file, scale)
         sfm.add_image(im1)
 
@@ -44,9 +45,12 @@ def run(scale, plot, in_files, outfile, num_images, feat):
 
             print()
 
+    if num_images is None:
+        sfm._close_loop()
+
     # More accurate optimization
     print("Optimizing one last time...")
-    sfm.optimize(tol=1e-3, max_iters=20, line_start="\t", verbose=10)
+    sfm.optimize(tol=1e-3, max_iters=50, line_start="\t", verbose=1)
 
     if outfile:
         sfm.save(outfile)
@@ -63,7 +67,7 @@ if __name__ == "__main__":
     # TODO: Way to read initial K in?
     parser = argparse.ArgumentParser(description="Structure from Motion")
     parser.add_argument("-i", "--in_files", type=str, default="data/statue", help="Folder that images are stored in. Images are assumed to be sequentially named.")
-    parser.add_argument("-f", "--feat", type=str, default="orb", help="Type of features to use. Options are sift or orb. Defaults to orb.")
+    parser.add_argument("-f", "--feat", type=str, default="sift", help="Type of features to use. Options are sift or orb. Defaults to sift.")
     parser.add_argument("-s", "--scale", type=int, default="100", help="Percentage to scale images down to.")
     parser.add_argument("-n", "--num_images", type=int, default=None, help="Use first n images. Defaults to all images.")
     parser.add_argument('-p', '--plot', action='store_true', help='Plot data when each image is read in, as well as at end.')
