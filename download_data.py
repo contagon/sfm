@@ -6,6 +6,7 @@ url = "https://drive.google.com/uc?id=1Wv04X0K8ja-EctX4ThN0G72Bd_z7xhWg"
 zip = "data/moose.zip"
 out = "data/"
 
+os.makedirs(out, exist_ok=True)
 gdown.download(url, zip, quiet=False)
 
 print("\nUnzipping...")
