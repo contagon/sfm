@@ -3,17 +3,17 @@ import cv2
 from numba.typed import List
 import open3d as o3d
 
-from jacobian import jac
-from manifold import SO3_from_vec
-from optimize import levenberg_marquardt
-from cv import residuals
+from .jacobian import jac
+from .manifold import SO3_from_vec
+from .optimize import levenberg_marquardt
+from .cv import residuals
 
 class StructureFromMotion():
     def __init__(self, K, feat="sift"):
         # setup feature matching
         self.feat_type = feat
         if feat == "sift":
-            self.feat = cv2.SIFT_create(nfeatures=10000)
+            self.feat = cv2.SIFT_create(nfeatures=1000000)
             # Use both matchers to enforce unique matching
             self.flann_matcher = cv2.FlannBasedMatcher()
             self.bf_matcher = cv2.BFMatcher(crossCheck=True)
@@ -194,7 +194,7 @@ class StructureFromMotion():
                                             )
 
     def save(self, filename):
-        np.savez(filename, K=self.K, P=self.Ps, T=self.Ts, pixels=self.pixels)
+        np.savez(filename, K=self.K, P=self.Ps, T=self.Ts, pixels=self.pixels, mm=self.measurements, unmatched=self.landmarks_new)
 
     def _add_measurements(self, new_mm):
         # Put all togehter & sort

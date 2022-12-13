@@ -1,6 +1,6 @@
 import numpy as np
 import scipy
-from manifold import K_from_vec, vec_from_K, SE3_from_vec, vec_from_SE3
+from .manifold import K_from_vec, vec_from_K, SE3_from_vec, vec_from_SE3
 
 def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, lam_multiplier=10.0, max_iters=100, tol=1e-8, verbose=False, line_start=""):
     # Loosely adapted from https://github.com/jjhartmann/Levenberg-Marquardt-Algorithm/blob/master/LMA.py
@@ -27,7 +27,7 @@ def levenberg_marquardt(residual, K_init, Ts_init, Ps_init, zs, jac, lam=10.0, l
         c = 1
         r = residual(K, Ts, Ps, zs)
         w = 1 / (1 + (r/c)**2)
-        b = J.T@(r*w)
+        b = J.T@r
             
         # Run with this linearization
         cost = prev_cost + 1

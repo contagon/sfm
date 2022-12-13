@@ -1,8 +1,8 @@
-from sfm import StructureFromMotion
+from sfm.sfm import StructureFromMotion
 import numpy as np
 import argparse
 import os
-from cv import read_image
+from sfm.cv import read_image
 
 np.set_printoptions(suppress=True, precision=3) #, edgeitems=30, linewidth=100000)
 
@@ -35,7 +35,7 @@ def run(scale, plot, in_files, outfile, num_images, feat):
         # Optimize & plot
         if sfm.num_cam > 1:
             print(f"\t Optimizing cam {i} results...")
-            sfm.optimize(tol=1, max_iters=2, line_start="\t\t", verbose=1)
+            sfm.optimize(tol=1, max_iters=10, line_start="\t\t", verbose=1)
             # iteratively save
             temp = os.path.splitext(outfile)
             sfm.save(f"{temp[0]}_{i}{temp[1]}")
@@ -50,7 +50,7 @@ def run(scale, plot, in_files, outfile, num_images, feat):
 
     # More accurate optimization
     print("Optimizing one last time...")
-    sfm.optimize(tol=1e-3, max_iters=50, line_start="\t", verbose=1)
+    sfm.optimize(tol=1e-4, max_iters=300, line_start="\t", verbose=1)
 
     if outfile:
         sfm.save(outfile)
