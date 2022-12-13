@@ -35,7 +35,7 @@ def run(scale, plot, in_files, outfile, num_images, feat):
         # Optimize & plot
         if sfm.num_cam > 1:
             print(f"\t Optimizing cam {i} results...")
-            sfm.optimize(tol=1, max_iters=10, line_start="\t\t", verbose=1)
+            sfm.optimize(tol=1, max_iters=5, line_start="\t\t", verbose=1)
             # iteratively save
             temp = os.path.splitext(outfile)
             sfm.save(f"{temp[0]}_{i}{temp[1]}")
@@ -50,7 +50,7 @@ def run(scale, plot, in_files, outfile, num_images, feat):
 
     # More accurate optimization
     print("Optimizing one last time...")
-    sfm.optimize(tol=1e-4, max_iters=300, line_start="\t", verbose=1)
+    sfm.optimize(tol=1e-4, max_iters=100, line_start="\t", verbose=1)
 
     if outfile:
         sfm.save(outfile)
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     # Parse through arguments
     # TODO: Way to read initial K in?
     parser = argparse.ArgumentParser(description="Structure from Motion")
-    parser.add_argument("-i", "--in_files", type=str, default="data/statue", help="Folder that images are stored in. Images are assumed to be sequentially named.")
+    parser.add_argument("-i", "--in_files", type=str, default="data/moose", help="Folder that images are stored in. Images are assumed to be sequentially named.")
     parser.add_argument("-f", "--feat", type=str, default="sift", help="Type of features to use. Options are sift or orb. Defaults to sift.")
     parser.add_argument("-s", "--scale", type=int, default="100", help="Percentage to scale images down to.")
     parser.add_argument("-n", "--num_images", type=int, default=None, help="Use first n images. Defaults to all images.")
